@@ -9,7 +9,13 @@ import (
 func sum(m1, m2 pb.MoneyAmount) pb.MoneyAmount {
 	f1, f2 := float64(m1.Fractional), float64(m2.Fractional)
 	lg1 := math.Max(1, math.Ceil(math.Log10(f1)))
+	if f1 == math.Pow(10, lg1) {
+		lg1++
+	}
 	lg2 := math.Max(1, math.Ceil(math.Log10(f2)))
+	if f2 == math.Pow(10, lg2) {
+		lg2++
+	}
 	lgMax := math.Max(lg1, lg2)
 
 	dSum := m1.Decimal + m2.Decimal
