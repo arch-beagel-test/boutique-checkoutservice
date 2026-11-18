@@ -310,11 +310,18 @@ func (cs *checkoutService) prepareOrderItemsAndShippingQuoteFromCart(ctx context
 	return out, nil
 }
 
+const slowQuoteThreshold = 2 * time.Second
+
 func (cs *checkoutService) quoteShipping(ctx context.Context, address *pb.Address, items []*pb.CartItem) (*pb.Money, error) {
+	start := time.Now()
 	shippingQuote, err := pb.NewShippingServiceClient(cs.shippingSvcConn).
 		GetQuote(ctx, &pb.GetQuoteRequest{
 			Address: address,
 			Items:   items})
+	// Issue #2: slow quote means a late order. Emailing the customer needs a new emailservice RPC (ADR emailservice/0001), not done here.
+	if d := time.Since(start); d > slowQuoteThreshold {
+		log.Warnf("[PlaceOrder] shipping quote took %s (> %s): order may arrive late", d, slowQuoteThreshold)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to get shipping quote: %+v", err)
 	}
