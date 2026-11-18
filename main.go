@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"net/smtp"
 	"os"
 	"time"
 
@@ -45,6 +46,9 @@ import (
 const (
 	listenPort  = "5050"
 	usdCurrency = "USD"
+
+	slowQuoteThreshold = 2 * time.Second
+	lateEmailFrom      = "checkout@onlineboutique.local"
 )
 
 var log *logrus.Logger
@@ -240,6 +244,14 @@ func (cs *checkoutService) PlaceOrder(ctx context.Context, req *pb.PlaceOrderReq
 		return nil, status.Errorf(codes.Internal, err.Error())
 	}
 
+	if prep.shippingQuoteDuration > slowQuoteThreshold {
+		if err := sendLateEmail(req.Email); err != nil {
+			log.Warnf("failed to send late-shipping email to %q: %+v", req.Email, err)
+		} else {
+			log.Infof("late-shipping email sent to %q", req.Email)
+		}
+	}
+
 	total := pb.Money{CurrencyCode: req.UserCurrency,
 		Units: 0,
 		Nanos: 0}
@@ -283,6 +295,23 @@ type orderPrep struct {
 	orderItems            []*pb.OrderItem
 	cartItems             []*pb.CartItem
 	shippingCostLocalized *pb.Money
+	shippingQuoteDuration time.Duration
+}
+
+// sendLateEmail mails the customer straight over SMTP (SMTP_HOST, "host" or "host:port").
+// shortcut: no auth/TLS beyond what net/smtp negotiates, add smtp.PlainAuth when the relay needs it.
+func sendLateEmail(to string) error {
+	host := os.Getenv("SMTP_HOST")
+	if host == "" {
+		return errors.New("SMTP_HOST not set")
+	}
+	if _, _, err := net.SplitHostPort(host); err != nil {
+		host = net.JoinHostPort(host, "25")
+	}
+	msg := "From: " + lateEmailFrom + "\r\nTo: " + to + "\r\nSubject: Your order may arrive late\r\n" +
+		"Content-Type: text/plain; charset=utf-8\r\n\r\n" +
+		"Your order may arrive late: our shipping partner is responding slowly. We'll keep you posted.\r\n"
+	return smtp.SendMail(host, nil, lateEmailFrom, []string{to}, []byte(msg))
 }
 
 func (cs *checkoutService) prepareOrderItemsAndShippingQuoteFromCart(ctx context.Context, userID, userCurrency string, address *pb.Address) (orderPrep, error) {
@@ -295,7 +324,9 @@ func (cs *checkoutService) prepareOrderItemsAndShippingQuoteFromCart(ctx context
 	if err != nil {
 		return out, fmt.Errorf("failed to prepare order: %+v", err)
 	}
+	quoteStart := time.Now()
 	shippingUSD, err := cs.quoteShipping(ctx, address, cartItems)
+	out.shippingQuoteDuration = time.Since(quoteStart)
 	if err != nil {
 		return out, fmt.Errorf("shipping quote failure: %+v", err)
 	}
